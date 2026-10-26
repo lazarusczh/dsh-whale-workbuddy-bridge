@@ -1,7 +1,7 @@
 {
   "name": "dsh-whale-workbuddy-bridge",
   "version": "0.1.0",
-  "description": "把 WorkBuddy / CodeBuddy 的积分余额接进 dsh-whale-widget 记账挂件：读本机登录态、维持凭据新鲜度、自动维护模型注册表，并提供积分快照文件与只读 HTTP 路由",
+  "description": "把 WorkBuddy / CodeBuddy 的积分余额接进 dsh-whale-widget 记账挂件：读本机登录态、维持凭据新鲜度、自动维护模型注册表，并用官方逐请求账单给出准确的每轮积分",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -15,11 +15,27 @@
   "main": "lib/index.js",
   "files": [
     "lib",
-    "assets",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "scripts": {
+    "test": "node run-tests.mjs",
+    "patch:check": "node apply-turn-credits-patch.mjs --check",
+    "patch:apply": "node apply-turn-credits-patch.mjs",
+    "patch:revert": "node apply-turn-credits-patch.mjs --revert"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<你的用户名>/dsh-whale-workbuddy-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/<你的用户名>/dsh-whale-workbuddy-bridge/issues"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

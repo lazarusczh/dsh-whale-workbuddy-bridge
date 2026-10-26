@@ -105,26 +105,51 @@ whale-widget 能记 DeepSeek 等厂商的余额，但 WorkBuddy 积分记不了�
 
 ## 安装
 
-### 方式一：link（开发/本地）
+### 前提条件
+
+| 依赖 | 为什么需要 |
+|---|---|
+| **dsh-connect-workbuddy** 并登录过 | 本插件从它的 `workbuddy-vault` 读登录态；没登录过就没有 token |
+| **dsh-whale-widget** | 记账挂件本体；本插件把积分喂给它 |
+| Node.js >= 20 | 插件运行环境（DSH 自带） |
+
+### 方式一：从源码装（当前推荐）
 
 ```powershell
-# 1. 把插件目录链接进 profile 的 node_modules
-cmd /c mklink /J "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-whale-workbuddy-bridge" "<本目录绝对路径>"
+git clone https://github.com/<你的用户名>/dsh-whale-workbuddy-bridge.git
+cd dsh-whale-workbuddy-bridge
 
-# 2. 在 profile 的 package.json 里登记
-#    dsh.profile.bundles 加一项 "dsh-whale-workbuddy-bridge"
-#    dependencies 加 "dsh-whale-workbuddy-bridge": "link:<相对路径>"
+# 1. 链接进 profile 的 node_modules
+cmd /c mklink /J "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-whale-workbuddy-bridge" "$PWD"
+
+# 2. 在 profile 的 package.json 里登记两处：
+#    "dsh": { "profile": { "bundles": [ ... , "dsh-whale-workbuddy-bridge" ] } }
+#    "dependencies": { ... , "dsh-whale-workbuddy-bridge": "link:<上面的绝对路径>" }
 ```
 
-> `dsh plugin --profile desktop add` 用不了：CLI 会报 `profile "desktop" is managed exclusively by the Electron application`。手工安装等效。
+然后**重启 DSH**。
 
-### 方式二：发布后
+> 为什么不用 `dsh plugin --profile desktop add`：CLI 会报
+> `profile "desktop" is managed exclusively by the Electron application`。
+> 桌面端的 profile 由 Electron 应用独占管理，手工登记等效且安全。
+
+### 方式二：从 npm 装（发布后）
 
 ```powershell
 dsh plugin --profile desktop add dsh-whale-workbuddy-bridge
 ```
 
 安装后**重启 DSH**。
+
+### 验证安装
+
+```powershell
+# 看补丁状态
+node apply-turn-credits-patch.mjs --check
+
+# 跑测试（离线部分任何环境都能跑）
+node run-tests.mjs
+```
 
 ### 安装后会发生什么（不需要任何手工配置）
 
@@ -380,11 +405,30 @@ node apply-turn-credits-patch.mjs --revert   # 撤销
 
 ---
 
+## 开发与测试
+
+```bash
+node run-tests.mjs
+```
+
+分两类：
+
+| 类别 | 需要什么 | 覆盖 |
+|---|---|---|
+| **离线** | 只要 Node | 逐包求和口径、账本逻辑、`Cr.` 显示、补丁幂等、从原版打补丁、`{credits_today}` 链路 |
+| **在线** | `workbuddy-vault` + 已装 whale-widget | 真实取数、宿主积分换算、端到端事件流、原生分支、账单查询 |
+
+在线部分缺条件时会**跳过并说明原因**，不算失败 —— 所以别人 clone 下来也能先跑离线部分。
+
+**265 项测试**，每个踩过的坑都有对应断言。改代码前请先读 `CONTRIBUTING.md`。
+
+---
+
 ## 与上游的关系
 
-本插件是**过渡方案**。更干净的解法是让 whale-widget 原生支持（见工作区的 `whale-widget-issue-workbuddy-credits.md`）。如果那个 issue 被采纳，本插件的 `native` 模式检测会自动切换，届时可以把本插件降级为「只负责维护注册表」。
+本插件是**过渡方案**。更干净的解法是让 whale-widget 原生支持（`kind: 'workbuddy'` 模板 + 逐请求账单取数）。如果那个 PR 被采纳，本插件的 `native` 模式检测会自动切换，届时可以把本插件降级为「只负责维护注册表」。
 
-另一条路是让 `dsh-connect-workbuddy` 落一份积分快照（见 `dsh-connect-workbuddy-issue-credits.md`）——那样任何记账插件都能直接读，本插件就可以退休。
+另一条路是让 `dsh-connect-workbuddy` 在对话路径也透传上游 SSE 里的 `usage.credit`（它目前只在探针/生图路径提取）——那样任何记账插件都能直接拿到精确值，本插件与 whale-widget 的估算都能退休。
 
 ---
 
