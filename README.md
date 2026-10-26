@@ -1,0 +1,393 @@
+# dsh-whale-workbuddy-bridge
+
+把 **WorkBuddy / CodeBuddy 积分**接进 [`dsh-whale-widget`](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget) 记账挂件。
+
+> 名字里的 `whale` 指 whale-widget（记账侧），`workbuddy` 指 WorkBuddy 积分（数据侧），`bridge` 说明它的角色是**桥**。
+>
+> 它**不 fork、不替换** whale-widget：余额靠它已有的注册表扩展点接入，零改动。
+> 唯一例外是「每轮积分」气泡 —— 那必须在 whale-widget 内部加一个占位符，
+> 所以由本插件**自动打一个小补丁并持续维护**（重装 whale-widget 后会自动重打，你不用管）。
+
+---
+
+## 它解决什么问题
+
+whale-widget 能记 DeepSeek 等厂商的余额，但 WorkBuddy 积分记不了，原因有三个：
+
+| 卡点 | 说明 |
+|---|---|
+| **没有公开 API** | 官方 Open API 只有 Auth / UserProfile / LocalAssistant / CloudTask / 兑换码，没有积分端点 |
+| **token 在别的插件手里** | `accessToken` 由 `dsh-connect-workbuddy` 维护在 `$DSH_HOME/workbuddy-vault/<region>/<accountId>.json`，约 30 天过期，且会自动轮换 |
+| **路由消费不了** | connect 插件有 `/plugins/dsh-connect-workbuddy/account-credits`，但 DSH 桌面端以 `--port 0` 启动，端口每次重启都变 |
+
+本插件的做法：**读 vault 拿 token → 打计费网关 → 维护 whale-widget 的模型注册表**。全程不改 whale-widget 的代码。
+
+---
+
+## 工作原理
+
+```
+┌─────────────────────────┐
+│ dsh-connect-workbuddy   │  维护登录态（自己续期）
+│  workbuddy-vault/cn/*.json │
+└───────────┬─────────────┘
+            │ 只读 accessToken
+            ▼
+┌─────────────────────────┐
+│ dsh-whale-workbuddy-bridge │  每 5 分钟一轮：
+│                           │  ① 读 vault
+│                           │  ② POST 计费网关
+│                           │  ③ 写注册表 + 快照
+│                           │  ④ 维护 whale-widget 的 {credits} 补丁
+└───────────┬─────────────┘
+            │ 写 .dshw-api.json（保留 usage 段）
+            │ + 自动打补丁（mtime 变了就重打）
+            ▼
+┌─────────────────────────┐
+│ dsh-whale-widget        │  按自己的节奏读注册表、画侧栏、弹每轮消耗气泡
+└─────────────────────────┘
+```
+
+### 两种模式（自动切换）
+
+| 模式 | 触发条件 | 注册表条目 |
+|---|---|---|
+| `native` | whale-widget **已带** `kind: 'workbuddy'` 模板 | `provider: 'workbuddy'`，极简，走原生逐包求和 |
+| `custom` | whale-widget 是**官方原版** | `provider: 'custom'` + POST + 静态 JSON 路径 |
+
+检测方式是读 whale-widget 的源码文本找 `kind: 'workbuddy'`——粗但有效，插件升级或打补丁后会自动跟随。
+
+### ⚠️ 余额为什么不能直接读 `TotalDosage`
+
+这是本项目踩得最深的一个坑，**别再走回头路**。
+
+上游返回里有个汇总字段 `data.Response.Data.TotalDosage`，看起来像"剩余总积分"，
+但它实际是**逐包 `CapacityRemain` 的简单相加**，而月度包的 `CapacityRemain`
+**是额度总量、不随消耗下降**。于是它把整个月度包算成"还剩满额"，结果偏大。
+
+实测（2026-10-26，一个真实账号）：
+
+| 字段 | 值 | 说明 |
+|---|---|---|
+| 一次性包合计 | 2570 | 正常 |
+| 月度包 `CapacitySize` | 500 | 额度总量 |
+| 月度包 `CapacityRemain` | **500** | ⚠️ 也是 500，不随消耗下降 |
+| 月度包 `CycleCapacityRemain` | **225.82** | ✅ 本周期真实剩余 |
+| `TotalDosage` | **3070** | 2570 + 500（错，偏大 274） |
+| 逐包正确求和 | **2795.82** | 与 WorkBuddy 本体显示的 279x 吻合 |
+
+**正确算法**（与 `dsh-connect-workbuddy` 的 `fetchCredits` 完全一致，
+它能把同一个数精确显示在指令输入框下方）：
+
+1. 月度包（`CapacityType === 4`）取 `CycleCapacityRemain`
+2. 其余包取 `CapacityRemain`
+3. `*Precise` 字符串字段优先（带小数），回退整数字段
+4. 一次性包：余量 ≤ 0 或已过期（`ExpiredTime`）的剔除；月度包不看 `ExpiredTime`
+5. 求和
+
+这条逻辑在两侧都实现了：
+
+- **本插件**：`summarizeAccounts()` —— 写进快照与自检路由
+- **whale-widget**：`fetchWorkBuddyCreditsBalance()`（`kind: 'workbuddy'` 分支）—— 侧栏显示用
+
+> 顺带记一个教训：我一度以为"上游的汇总字段一定权威"，把实现改成读 `TotalDosage`，
+> 结果界面显示 3070 而真实只剩 2796。**汇总字段不等于正确字段**，要拿可观测的真值校准。
+
+### 三个设计取舍
+
+1. **只读 vault，绝不写**。`refreshToken` 在续期后会**轮换**，两个写者会让 connect 插件手里的那份失效。宁可只读、过期就报错提示「打开一次 WorkBuddy 卡片」。
+2. **有就接管，没有就新增**（两条路径缺一不可）：
+   - **新用户**（绝大多数）：注册表里没有任何 WorkBuddy 条目 → **自动新增**。装完重启，「WorkBuddy 积分」直接出现在挂件里，接口 / 字段路径 / 凭据 / `allowCustomHost` 全自动配好，用户不需要知道计费网关长什么样。
+   - **老用户**（已手工建过）：实测就发生过——面板生成的 `api_xxxxxxxx_xxxxx`，账本已经记了几十积分。此时若再插一条固定 id 的条目，界面上会冒出两个「WorkBuddy 积分」，且旧那条的 `usage` 账本成为孤儿（今日已用归零）。所以先认领、原地更新、保留 id 与账本。
+3. **绝不整份覆盖 `.dshw-api.json`**。whale-widget 的**余额差账本（今日已用）就存在这个文件的 `usage` 段里**，整份覆盖会清空它。这里是「读-改-写」，且内容没变就不落盘。
+
+---
+
+## 安装
+
+### 方式一：link（开发/本地）
+
+```powershell
+# 1. 把插件目录链接进 profile 的 node_modules
+cmd /c mklink /J "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-whale-workbuddy-bridge" "<本目录绝对路径>"
+
+# 2. 在 profile 的 package.json 里登记
+#    dsh.profile.bundles 加一项 "dsh-whale-workbuddy-bridge"
+#    dependencies 加 "dsh-whale-workbuddy-bridge": "link:<相对路径>"
+```
+
+> `dsh plugin --profile desktop add` 用不了：CLI 会报 `profile "desktop" is managed exclusively by the Electron application`。手工安装等效。
+
+### 方式二：发布后
+
+```powershell
+dsh plugin --profile desktop add dsh-whale-workbuddy-bridge
+```
+
+安装后**重启 DSH**。
+
+### 安装后会发生什么（不需要任何手工配置）
+
+重启后约 1 秒内，插件会自己做完这些事：
+
+| 步骤 | 结果 |
+|---|---|
+| 读 `workbuddy-vault/` | 拿到 accessToken（不写回，只读） |
+| 打计费网关 | 拿到剩余积分 |
+| 写 `.dshw-api.json` | **自动新增**一条「WorkBuddy 积分」模型 |
+| 写凭据（custom 模式） | `WORKBUDDY_ACCESS_TOKEN` |
+| 写快照 | `.workbuddy-credits.json` |
+
+然后挂件里就多出一个「WorkBuddy 积分」模型，侧栏显示 `余额 xxxx.xx Cr. · 今日已用 xx.xx Cr.`。
+
+> **单位显示**：数据层用的是币种代码 `CREDITS`，界面上映射成更短的 `Cr.`
+> （`2763.48 CREDITS` → `2763.48 Cr.`，省 4 个字符，气泡不挤）。
+> 想换成别的写法改 `CURRENCY_LABELS` 即可，不影响存储与计算。
+
+> **⚠️ 不要再去面板里手工添加一个**。那是自动生成的；手工再加会变成两条，而且新的那条拿不到 token。想停用请移除本插件，或配置 `enabled: false`。
+
+**前提条件**：必须已装 `dsh-connect-workbuddy` 并登录过（否则本机没有 vault，插件会在自检里提示「先打开一次 WorkBuddy 卡片」）。
+
+### 排查「侧栏没数」
+
+```powershell
+# 插件自带自检路由（注意端口是随机的，从 DSH 启动日志里找）
+curl http://127.0.0.1:<port>/dsh-workbuddy-bridge/status.json
+```
+
+它会直接告诉你卡在哪一环：vault 空 / token 过期 / 没装 whale-widget / 注册表没写入。
+
+---
+
+## 每轮积分消耗（「刚才这轮花了多少积分」）
+
+whale-widget 本来就有「每轮对话结束后弹气泡显示本轮消耗」的功能，但它对 WorkBuddy
+**永远不弹**——因为 `dsh-connect-workbuddy` 给 DSH 报的 `cost` 是 `NO_COST`（四项全 0，
+注释写明「订阅配额无法按 token 定价」），而气泡的准入条件是 `cost > 0`。
+
+本插件补上了这一块，做法是给 whale-widget 加一个 **`{credits}` 占位符**。
+
+### 三个积分/消耗占位符
+
+| 占位符 | 含义 | 口径 |
+|---|---|---|
+| `{cost}` | 本轮消耗金额（人民币） | WorkBuddy 恒为 0，其它厂商正常 |
+| `{credits}` | **本轮**消耗积分 | 本机这一轮 |
+| `{expense_ds}` | **今日**已用（原有） | **账号维度**，含别的设备 |
+| `{expense_src}` | `{expense_ds}` 的来源标注 | 显示「余额差记账」/「本地估算」 |
+| `{credits_today}` | **今日**积分（本机） | 只算本机 DSH 的对话 |
+
+推荐文案：
+
+```
+本轮 {credits} 积分
+今日 {credits_today} 积分（账号总 {expense_ds}）
+```
+
+这样一眼就能看出「本机花了多少」和「账号一共花了多少」。
+
+### 怎么用
+
+1. 打开 whale-widget 面板 → 「提示与音效设置」→「每轮消耗提示」→ 自定义内容
+2. 在文案里写 `{credits}`（和/或 `{credits_today}`）
+3. 保存。之后每轮结束，气泡就会显示这一轮消耗的积分
+
+默认文案 `¥ {cost}` 不动，所以非 WorkBuddy 的轮次行为完全不变。
+
+### 为什么「逐轮」不用余额前后差
+
+先纠正一个我最初判断错的地方：我曾以为「余额会自己掉」，因为观察到没发请求余额也降了。
+**那个结论是错的** —— 当时的下降其实是你正在用 WorkBuddy 本体（网页/桌面/手机）产生的
+**真实消耗**，不是账在漏。
+
+后续复测（连续观测 5 分钟）也印证了这点：只发生 **2 次阶梯式下降**（-7.88 / -3.92），
+其余 15 次采样完全不变 —— 这符合"别的客户端在成批地花"，而不是平滑流失。
+
+所以准确的说法是**口径问题，不是可靠性问题**：
+
+| 口径 | 含义 | 适用场景 |
+|---|---|---|
+| **余额差** | 账号维度今日总消耗（含别的设备/客户端） | 「我今天一共花了多少积分」← `{expense_ds}` 用这个，**没问题** |
+| **token 费率** | 本机这一轮消耗 | 「刚才这轮花了多少积分」← `{credits}` 用这个 |
+
+逐轮气泡要的是**本机语义**，余额差区分不出是本机 DSH 还是你在网页版花的，所以走费率换算。
+两处口径不同、各用各的，不是谁替代谁。
+
+> 另有一次实测：单轮真值 0.18，余额差算出 5.14 —— 差额就是那段时间别处的消耗。
+
+### 积分是怎么算出来的
+
+**优先用官方逐请求账单 —— 那是扣费真值，不需要估算。**
+
+```
+POST https://www.workbuddy.cn/billing/meter/get-user-request-usage
+body: { startTime, endTime, pageNum, pageSize }
+→ data.data[] = { requestId, credit, model, requestTime, ... }
+```
+
+每条带**真实积分**。实测（928 个请求样本）：
+
+| 分位 | 单请求积分 |
+|---|---|
+| 最小 | 0.01 |
+| P25 | 0.42 |
+| **中位** | **0.61** |
+| P75 | 0.87 |
+| P95 | 1.52 |
+| 最大 | 25.85 |
+
+一轮对话通常十几到几十次请求 ⇒ 真实消耗是**几到几十积分**。
+
+归属方式：账单 `requestTime` 只精确到**分钟**，所以按**时间窗口**求和
+（一轮开始记 `startMs`、结束记 `endMs`，两端各放宽 1 分钟）。
+
+账单有结算延迟（实测约 11 秒），所以查询前会等 12 秒，窗口内没数据再等 10 秒重查。
+
+### 为什么不再用 token 费率估算
+
+**那个方案整轮会高估 20~180 倍**，实测对比：
+
+| 轮次 | token 估算 | 官方账单 | 高估 |
+|---|---|---|---|
+| turn=15 | 1453.36 | **7.92** | 183× |
+| turn=16 | 291.46 | **~7** | 40× |
+
+原因：一轮里有几十次 LLM 调用，每次重读完整上下文，`cacheReadTokens` 累加到
+几百万～两千万 token，线性累加就爆了。单请求粒度上费率是准的（样本 C 真值 0.05，
+算得 0.0500），但**整轮不能用**。
+
+费率仍保留作**兜底**（没装桥接插件 / 账单查询失败时），此时账本会标
+`source: 'tokens'` 且 `note` 写明「估算」，用户能看出这个数是估的。
+
+> **关键教训**：用 6 个单请求样本标定费率、再拿去算整轮，是方法论错误 ——
+> 样本的 token 量级（几千）和整轮（几百万）差 3 个数量级，外推必然失真。
+> **能用官方真值就别估算。**
+
+### 已知精度边界
+
+| 情形 | 表现 |
+|---|---|
+| 正常对话 | 官方账单，**准确** |
+| 同时在用 WorkBuddy 本体 | 其请求会落在同一时间窗口，被一并计入（窗口已尽量收窄） |
+| 一轮跨分钟边界 | 误差量级约「单请求 0.6 积分」 |
+| 账单结算延迟 | 查询前等 12 秒；仍无数据则退回估算 |
+| 没装桥接插件 | whale-widget 退回 token 估算（会偏高，见上） |
+
+
+### 识别哪些轮次算积分
+
+判据用 **`source.provider`**（DSH 的权威字段，来自 `dsh-agent-loop` 的
+`source: { provider, model }`），`dsh-connect-workbuddy` 把 provider 恒定为 `workbuddy`。
+
+**不能只靠模型名**——WorkBuddy 的真实模型名是 `GLM-5.3 · x0.79`、
+`DeepSeek-V4.1-Flash · x0.30` 这种，压根不含 workbuddy 字样。provider 缺失时才退回
+模型名启发式（含 `· x` 后缀 / 注册表 matchIds），判不出来就算「不是」——宁可漏算，
+也不把 DeepSeek 直连的 token 当积分算进去。
+
+### 补丁是插件自己维护的，你不用管
+
+`{credits}` 必须改 whale-widget 自己的两个文件（宿主算积分、前端渲染），
+**为什么不能全放进本插件**：
+
+- 宿主侧的 `finalizeTurn` 准入条件 `agg.cost > 0` 在 whale-widget 的**私有闭包**里，外部无法影响
+- 前端 `whale-widget.js` 是 `(function(){...})()` 的 IIFE，只往 window 挂了个防重复的布尔值，
+  没有任何导出/钩子 ⇒ 运行时 monkey-patch 不可能
+
+所以只能改文件。但**不需要你手工操作**：本插件启动时会自动打补丁，并且每次 tick
+比对两个文件的 mtime —— whale-widget 被重装/升级覆盖后，**下一轮 tick 会自动重打**。
+
+| 时机 | 行为 |
+|---|---|
+| 首次启动 | 检测到未打 ⇒ 自动打上，日志提示「需要重启 DSH 生效」 |
+| 每次 tick | 只比对 mtime（零写入）；发现被覆盖就自动重打 |
+| 补丁已就位 | 完全无操作 |
+
+手工入口仍然保留（排查用）：
+
+```powershell
+node apply-turn-credits-patch.mjs            # 强制打补丁（幂等）
+node apply-turn-credits-patch.mjs --check    # 只看状态
+node apply-turn-credits-patch.mjs --revert   # 撤销
+```
+
+> 撤销后记得把 `turnCredits` 设为 `false`，否则插件下次启动会重新打上。
+
+补丁逻辑只有一份（`lib/patch-whale.mjs`），脚本是它的薄封装 —— 免得两处各写一套、日后漂移。
+幂等判据用**内容特征**（`CREDIT_MISS_RATE` 常量、`usageFillText` 的第六个参数），
+所以反复跑不会重复插入。
+
+---
+
+## 配置
+
+在 profile 的 `cordis.patch.yml` 里可覆盖（都可选）：
+
+```yaml
+- id: dsh-whale-workbuddy-bridge
+  name: dsh-whale-workbuddy-bridge
+  config:
+    enabled: true          # false = 完全停用
+    region: cn             # cn | global，多账号时优先取哪个区
+    intervalMs: 300000     # 轮询间隔，默认 5 分钟
+    turnCredits: true      # false = 关闭每轮积分跟踪（只保留余额显示）
+```
+
+---
+
+## 产物
+
+| 产物 | 位置 | 用途 |
+|---|---|---|
+| 模型注册表 | `$DSH_HOME/.dshw-api.json` | whale-widget 读它来取数（保留 `usage` 段） |
+| 积分快照 | `$DSH_HOME/.workbuddy-credits.json` | **给任何记账插件读**，不用依赖本插件内部 |
+| 每轮积分账本 | `$DSH_HOME/.workbuddy-turn-credits.json` | 最近 50 轮的积分历史（重启后仍可查） |
+| 只读路由 | `GET /dsh-workbuddy-bridge/credits.json` | 当前余额读数 |
+| 只读路由 | `GET /dsh-workbuddy-bridge/last-turn.json` | 最近一轮的积分消耗 |
+| 只读路由 | `GET /dsh-workbuddy-bridge/status.json` | 自检：卡在哪一环 |
+
+> 路由都带随机端口（DSH 以 `--port 0` 启动），不适合做长期契约；要跨插件共享请读快照文件。
+
+快照形状（**不含 token / uid / uin**）：
+
+```json
+{
+  "version": 1,
+  "source": "dsh-whale-workbuddy-bridge",
+  "mode": "native",
+  "ok": true,
+  "remaining": 3531,
+  "preciseTotal": 3531.9,
+  "expiringSoon": 120.07,
+  "nearestExpiryMs": 1792805794000,
+  "packages": [{ "packageName": "…", "remain": 100, "monthly": false, "expiresAtMs": 1792900789000 }],
+  "packageCount": 35,
+  "accountName": "…",
+  "region": "cn",
+  "tokenExpiresAtMs": 1795141836000,
+  "readAtMs": 1792738000000
+}
+```
+
+---
+
+## 已知限制
+
+1. **依赖 `dsh-connect-workbuddy`**。没装它、或从没登录过 → `NO_VAULT`，提示「先打开一次 WorkBuddy 卡片」。
+2. **token 过期不自动续**（本插件只读）。只要 connect 插件还在跑，它会自己续期，本插件跟着读到新的就行。
+3. **只取一个账号**（优先 `cn`、其次最近刷新）。多账号只显示一个。
+4. **今日已用是估算**。上游没有用量端点，只能靠余额差；受 `TotalDosage` 整数截断影响，**误差 ±1 积分**。
+5. **「即将过期」按 3 天窗口**。这个数字来自 connect 插件的 `SOON_MS = 2592e5`（= 3 天，不是 30 天）；按 30 天算会让两个界面的数互相矛盾。
+
+---
+
+## 与上游的关系
+
+本插件是**过渡方案**。更干净的解法是让 whale-widget 原生支持（见工作区的 `whale-widget-issue-workbuddy-credits.md`）。如果那个 issue 被采纳，本插件的 `native` 模式检测会自动切换，届时可以把本插件降级为「只负责维护注册表」。
+
+另一条路是让 `dsh-connect-workbuddy` 落一份积分快照（见 `dsh-connect-workbuddy-issue-credits.md`）——那样任何记账插件都能直接读，本插件就可以退休。
+
+---
+
+## 许可
+
+MIT

@@ -1,0 +1,28 @@
+{
+  "name": "dsh-whale-workbuddy-bridge",
+  "version": "0.1.0",
+  "description": "把 WorkBuddy / CodeBuddy 的积分余额接进 dsh-whale-widget 记账挂件：读本机登录态、维持凭据新鲜度、自动维护模型注册表，并提供积分快照文件与只读 HTTP 路由",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "workbuddy",
+    "codebuddy",
+    "credits",
+    "whale-widget"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "assets",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
