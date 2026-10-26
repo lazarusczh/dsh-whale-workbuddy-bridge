@@ -34,6 +34,7 @@ const ONLINE = [
   'test-balance-display.mjs',    // 需要 vault
   'test-billing-source.mjs',     // 需要 vault + 网络
   'test-real-credits.mjs',       // 需要已安装 whale-widget
+  'test-reconcile.mjs',          // 竞态修复（估算→真值校正）
 ]
 
 function hasVault() {

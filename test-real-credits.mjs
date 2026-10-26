@@ -19,7 +19,8 @@ console.log('=== 1. 函数已就位 ===')
 const fnSrc = /    function readWorkbuddyRealCredits\(sessionId\) \{[\s\S]*?\n    \}/.exec(src)
 check('找到 readWorkbuddyRealCredits', !!fnSrc, fnSrc ? fnSrc[0].length + ' 字节' : '')
 check('finalizeTurn 里优先用它', src.includes('const realCredits = readWorkbuddyRealCredits(sessionId)'))
-check('有估算兜底', src.includes('realCredits !== undefined ? realCredits : (agg ? creditsOfAgg(agg) : 0)'))
+check('有估算兜底', src.includes('realCredits !== undefined ? realCredits : estimate'))
+check('有异步校正（修复竞态）', src.includes('if (usedEstimate && agg) {'))
 
 console.log('\n=== 2. 用真实账本验证取值 ===')
 if (fnSrc) {

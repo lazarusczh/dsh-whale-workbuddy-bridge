@@ -1,12 +1,33 @@
 # dsh-whale-workbuddy-bridge
 
-把 **WorkBuddy / CodeBuddy 积分**接进 [`dsh-whale-widget`](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget) 记账挂件。
+**一座桥：把 `dsh-connect-workbuddy` 已经拿到的 WorkBuddy 登录态与积分，喂给 `dsh-whale-widget` 记账挂件。**
 
-> 名字里的 `whale` 指 whale-widget（记账侧），`workbuddy` 指 WorkBuddy 积分（数据侧），`bridge` 说明它的角色是**桥**。
+```
+dsh-connect-workbuddy  ──(vault 登录态)──▶  dsh-whale-workbuddy-bridge  ──(模型注册表 + 积分)──▶  dsh-whale-widget
+```
+
+> **它不是一个独立的 WorkBuddy 客户端，也不自己登录。**
+> 名字里的 `workbuddy` 指的是「WorkBuddy 积分」这个数据，但**数据来源是 connect 插件**；
+> `whale` 指 whale-widget（消费侧）；`bridge` 说明它只是**中间那座桥**。
 >
-> 它**不 fork、不替换** whale-widget：余额靠它已有的注册表扩展点接入，零改动。
-> 唯一例外是「每轮积分」气泡 —— 那必须在 whale-widget 内部加一个占位符，
-> 所以由本插件**自动打一个小补丁并持续维护**（重装 whale-widget 后会自动重打，你不用管）。
+> 换个更准确的说法：**`connect-workbuddy` → `whale-widget` 的 bridge**。
+> 少了任何一端它都没有意义。
+
+### 两个必需的前置插件
+
+| 插件 | 角色 | 缺了会怎样 |
+|---|---|---|
+| [`dsh-connect-workbuddy`](https://github.com/dingminhua/dsh-connect-workbuddy) | **数据源**：负责登录 WorkBuddy、维护 token、把积分显示在输入框下方 | 没有 `workbuddy-vault` ⇒ 本插件拿不到 token ⇒ 自检报 `NO_VAULT`，提示「先打开一次 WorkBuddy 卡片」 |
+| [`dsh-whale-widget`](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget) | **消费方**：侧栏余额、今日已用、每轮消耗气泡 | 没有它 ⇒ 积分无处显示，本插件只写快照文件 |
+
+> **所以安装顺序是：先 connect-workbuddy 并登录 → 再装 whale-widget → 最后装本插件。**
+
+### 它不改 whale-widget 的架构
+
+它**不 fork、不替换** whale-widget：余额靠它已有的注册表扩展点接入，零改动。
+
+唯一例外是「每轮积分」气泡 —— 那必须在 whale-widget 内部加一个占位符，
+所以由本插件**自动打一个小补丁并持续维护**（重装 whale-widget 后会自动重打，你不用管）。
 
 ---
 
@@ -105,13 +126,32 @@ whale-widget 能记 DeepSeek 等厂商的余额，但 WorkBuddy 积分记不了�
 
 ## 安装
 
-### 前提条件
+### ⚠️ 前提条件（先读这个）
 
-| 依赖 | 为什么需要 |
-|---|---|
-| **dsh-connect-workbuddy** 并登录过 | 本插件从它的 `workbuddy-vault` 读登录态；没登录过就没有 token |
-| **dsh-whale-widget** | 记账挂件本体；本插件把积分喂给它 |
-| Node.js >= 20 | 插件运行环境（DSH 自带） |
+**本插件是「connect-workbuddy → whale-widget」的桥，两端都必须在。**
+
+```
+① dsh-connect-workbuddy（登录 WorkBuddy）  ──▶ ② dsh-whale-workbuddy-bridge（本插件） ──▶ ③ dsh-whale-widget（显示）
+```
+
+| 顺序 | 插件 | 必须先做到什么 | 缺了会怎样 |
+|---|---|---|---|
+| ① | **dsh-connect-workbuddy** | 已安装，且**打开过一次 WorkBuddy 卡片完成登录** | 本机没有 `workbuddy-vault` ⇒ 拿不到 token ⇒ 自检报 `NO_VAULT`，提示「先打开一次 WorkBuddy 卡片」 |
+| ② | **本插件** | —— | —— |
+| ③ | **dsh-whale-widget** | 已安装并启用 | 积分无处显示；本插件只写快照文件，侧栏什么都不会变 |
+| 运行时 | Node.js >= 20 | DSH 自带，一般无需处理 | 插件加载失败 |
+
+> **为什么必须先登录**：本插件**只读不写** vault（`refreshToken` 会轮换，两个写者会让
+> connect 插件手里那份失效）。它拿不到 token 就不会自己去登录——那不是它的职责。
+>
+> 验证前提是否满足：
+> ```powershell
+> # 有 vault 文件 = 登录过
+> dir "$env:USERPROFILE\.dsh\workbuddy-vault" -Recurse -Filter *.json
+>
+> # 有 whale-widget = 装好了
+> dir "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-whale-widget"
+> ```
 
 ### 方式一：从源码装（当前推荐）
 
