@@ -156,7 +156,7 @@ whale-widget 能记 DeepSeek 等厂商的余额，但 WorkBuddy 积分记不了�
 ### 方式一：从源码装（当前推荐）
 
 ```powershell
-git clone https://github.com/<你的用户名>/dsh-whale-workbuddy-bridge.git
+git clone https://github.com/lazarusczh/dsh-whale-workbuddy-bridge.git
 cd dsh-whale-workbuddy-bridge
 
 # 1. 链接进 profile 的 node_modules

@@ -15,23 +15,17 @@
 
 建完 GitHub 会显示一段命令，用下面的替代它。
 
-## 二、把占位符换成你的用户名
+## 二、占位符已填好
 
-`package.json` 里有两处 `<你的用户名>`：
-
-```json
-"repository": { "url": "https://github.com/<你的用户名>/dsh-whale-workbuddy-bridge.git" },
-"bugs":       { "url": "https://github.com/<你的用户名>/dsh-whale-workbuddy-bridge/issues" }
-```
-
-README 的安装章节里也有一处 `git clone` 的地址。改掉这三处。
+`package.json` 的 `repository` / `bugs` 和 README 里的 `git clone` 地址都已指向
+`https://github.com/lazarusczh/dsh-whale-workbuddy-bridge`。换账号时才需要再改这三处。
 
 ## 三、推送
 
-在本目录执行（把 `你的用户名` 换成实际的）：
+在本目录执行：
 
 ```bash
-git remote add origin https://github.com/你的用户名/dsh-whale-workbuddy-bridge.git
+git remote add origin https://github.com/lazarusczh/dsh-whale-workbuddy-bridge.git
 git branch -M main
 git push -u origin main
 ```
@@ -39,7 +33,8 @@ git push -u origin main
 首次推送会让你登录。**推荐用 Personal Access Token**（GitHub 2021 年后不再接受密码）：
 
 - 生成：https://github.com/settings/tokens → "Generate new token (classic)" → 勾 `repo` → 复制
-- 推送时 Username 填 GitHub 用户名，Password 粘 token
+- 推送时 Username 填 `lazarusczh`，Password 粘 token
+- 想让 Git 记住：`git config --global credential.helper manager`
 
 或者用 GitHub CLI（更省事）：
 
@@ -79,8 +74,8 @@ npm publish --access public
 # 1. 暂存区里有没有疑似 token
 git grep -nIE "(Bearer [A-Za-z0-9_.-]{25,}|eyJ[A-Za-z0-9_-]{20,})" -- .
 
-# 2. 有没有真实账号标识（把 <你的用户名> 换成你的 GitHub 用户名再跑）
-git grep -nI "<你的用户名>\|uin\|uid" -- . | grep -v "不返回\|不打印\|占位"
+# 2. 有没有真实账号标识（把 lazarusczh 换成你的 GitHub 用户名再跑）
+git grep -nI "lazarusczh\|uin\|uid" -- . | grep -v "不返回\|不打印\|占位"
 
 # 3. 确认运行产物没被跟踪
 git ls-files | grep -E "\.dshw-|\.workbuddy-|credentials" || echo "干净"
