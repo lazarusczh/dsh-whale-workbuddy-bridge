@@ -21,8 +21,8 @@ const HOST = path.join(DSH_HOME, 'profiles', 'desktop', 'node_modules', 'dsh-wha
 const src = fs.readFileSync(HOST, 'utf8')
 
 console.log('=== 1. 竞态修复代码已就位 ===')
-check('区分了 estimate / realCredits', src.includes('const estimate = agg ? creditsOfAgg(agg) : 0'))
-check('有 usedEstimate 标记', src.includes('const usedEstimate = realCredits === undefined'))
+check('不再用估算填数', src.includes('const usedEstimate = false'))
+check('有 pending 标记', src.includes('creditsPending'))
 check('有异步回填', src.includes('if (usedEstimate && agg) {'))
 check('20 秒后校正', src.includes('}, 20_000)'))
 check('校正 lastTurn.credits', src.includes('lastTurn.credits = real'))
@@ -106,8 +106,9 @@ console.log('\n=== 4. 桥接插件侧：账本确实标了 source ===')
 {
   const ratesSrc = fs.readFileSync(path.join('lib', 'turn-credits.mjs'), 'utf8')
   check('有 source = billing', ratesSrc.includes("source = 'billing'"))
-  check('有 source = tokens 兜底', ratesSrc.includes("let source = 'tokens'"))
-  check('查询前等待结算', ratesSrc.includes('setTimeout(r, 12_000)'))
+  check('有 source = balance', ratesSrc.includes("source = 'balance'"))
+  check('有 source = pending', ratesSrc.includes("source = 'pending'"))
+  check('查询前等待结算', ratesSrc.includes('setTimeout(r, 15_000)'))
 }
 
 console.log('\n=== result: ' + pass + ' passed, ' + fail + ' failed ===')

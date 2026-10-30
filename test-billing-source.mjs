@@ -77,8 +77,10 @@ console.log('\n=== 兜底：无 billing 时退回估算 ===')
   })
   check('仍能定稿', !!rec)
   if (rec) {
-    check('source 是 tokens', rec.source === 'tokens', rec.source)
-    check('note 标明是估算', rec.note.includes('估算'), rec.note)
+    // 2026-10-30 起：没有真值时记 pending，**不再填 token 估算**（那个高估 8~45 倍）
+    check('source 是 pending', rec.source === 'pending', rec.source)
+    check('credits 是 0 不是估算', rec.credits === 0, rec.credits)
+    check('有 pending 标记', rec.pending === true, rec.pending)
   }
 }
 

@@ -36,6 +36,7 @@ const ONLINE = [
   'test-real-credits.mjs',       // 需要已安装 whale-widget
   'test-reconcile.mjs',          // 竞态修复（估算→真值校正）
   'test-bucket-attribution.mjs', // 5 分钟桶归属（含真实账单）
+  'test-no-estimate.mjs',        // 停用估算，三级取值
 ]
 
 function hasVault() {
